@@ -1,0 +1,712 @@
+---
+title: "Island Vibes"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, message=FALSE, warning=FALSE}
+# load packages
+if (!require(tidyverse)) {
+  install.packages("tidyverse")
+}
+if (!require(scales)) {
+  install.packages("scales")
+}
+if (!require(patchwork)) {
+  install.packages("patchwork")
+}
+if (!require(jcolors)) {
+  install.packages("jcolors")
+}
+if (!require(knitr)) {
+  install.packages("knitr")
+}
+if (!require(lubridate)) {
+  install.packages("lubridate")
+}
+if (!require(tidymodels)) {
+  install.packages("tidymodels")
+}
+if (!require(janitor)) {
+  install.packages("janitor")
+}
+if (!require(kableExtra)) {
+  install.packages("kableExtra")
+}
+if (!require(reticulate)) {
+  install.packages("reticulate")
+}
+if (!require(fuzzyjoin)) {
+  install.packages("fuzzyjoin")
+}
+if (!require(mgcv)) {
+  install.packages("mgcv")
+}
+if (!require(zoo)) {
+  install.packages("zoo")
+}
+if (!require(ggrepel)) {
+  install.packages("ggrepel")
+}
+if (!require(spotifyr)) {
+  install.packages("spotifyr")
+}
+if (!require(corrr)) {
+  install.packages("corrr")
+}
+if (!require(tidytext)) {
+  install.packages("tidytext")
+}
+if (!require(LiblineaR)) {
+  install.packages("LiblineaR")
+}
+if (!require(keyring)) {
+  install.packages("keyring")
+}
+
+
+# this loads custom plot theme from saved location
+
+source('~/Documents/Projects/tools/theme_main.R')
+
+# loading in helper functions
+
+source('~/Documents/Projects/ExploreF1/helper_functions_track_evo.R')
+
+```
+
+  
+```{r, message=FALSE, warning=FALSE, echo=FALSE, eval=FALSE}
+
+theme_main_add <- function() {
+  
+    theme(plot.title = element_text(hjust = 0),
+        plot.subtitle = element_text(face = "italic",
+                                     hjust = 0),
+        plot.background = element_rect(fill = NA,
+                                       color = "black",
+                                       size = 2)
+        )
+  
+}
+
+```
+
+```{r}
+
+id <- "60714a4297514197b37355b07367cb0a"
+
+Sys.setenv(SPOTIFY_CLIENT_ID = id)
+Sys.setenv(SPOTIFY_CLIENT_SECRET = key_get(service = "secret", username = "colin_renville_secret"))
+access_token <- get_spotify_access_token()
+
+```
+
+
+```{r}
+
+my_id <- "12121211477"
+my_plists <- get_user_playlists(my_id)
+
+island_vibes_df <- my_plists %>%
+  dplyr::filter(stringr::str_detect(name, "Island Vibes"),
+                id == "4B2lrMRvAnzWYeFGchNEGC") %>%
+  unnest(images) 
+
+```
+
+
+```{r, echo=FALSE, eval=FALSE}
+
+
+tracks1 <- get_playlist_tracks(island_vibes_df$id)
+tracks2 <- get_playlist_tracks(island_vibes_df$id, offset = 100)
+tracks3 <- get_playlist_tracks(island_vibes_df$id, offset = 200)
+tracks <- rbind(tracks1, tracks2, tracks3)
+
+features1 <- get_track_audio_features(tracks1$track.id)
+features2 <- get_track_audio_features(tracks2$track.id)
+features3 <- get_track_audio_features(tracks3$track.id)
+features <- rbind(features1, features2
+                  # , features3
+                  )
+
+track_features2 <- tracks %>%
+  left_join(features, by = c("track.id" = "id")) %>%
+  select("track.id", "track.artists", "track.name", "track.duration_ms", "track.popularity",
+         danceability,
+         energy,
+         key,
+         loudness,
+         mode,
+         speechiness,
+         acousticness,
+         instrumentalness,
+         liveness,
+         valence,
+         tempo
+         # type
+         ) %>%
+  unnest("track.artists",
+         names_repair = "unique") %>%
+  group_by(track.id) %>%
+  mutate(song_rownum = row_number() # , 
+         # artists_name = paste0(unlist(name), collapse = ","),
+         # id_name = paste0(unlist(id), collapse = ",")
+         ) %>%
+  ungroup() %>%
+  filter(song_rownum == "1") %>% # only selecting row for primary artist of a song
+  select(-c(href, type, uri, external_urls.spotify, song_rownum))
+
+
+```
+
+
+```{r}
+
+# scale the above chunk into a function based on island_vibes_df$tracks.total
+
+create_playlist_song_features <- function(playlist_id) {
+  
+  # debug
+  # playlist_id <- "4B2lrMRvAnzWYeFGchNEGC"
+  # playlist_track_ct <- 471
+  
+  
+  if (exists("my_plists")) {
+    
+    assertthat::assert_that(inherits(my_plists, "data.frame"),
+                            msg = "my_plists must be a dataframe.")
+    
+  } else {
+      
+    print("my_plists object does not exist!")
+    
+  }
+  
+  playlist_df <- my_plists %>%
+    dplyr::filter(id == playlist_id) %>%
+    select(id, name, tracks.total)
+  
+  # pull track count
+  ## need to ensure that there is only a single row / playlist ? 
+  
+  playlist_track_ct <- playlist_df %>%
+    dplyr::pull(as.numeric(tracks.total))
+  
+  # derive the offsets needed, given a playlist's playlist_track_ct
+  
+  playlist_track_max_offset <- plyr::round_any(playlist_track_ct, 100, f = floor)
+  
+  # if between 100 and 199, then offset == 100
+  # if between 200 and 299, then offset == 200, .etc
+  
+  playlist_offset <- seq(0,playlist_track_max_offset, by = 100)
+  
+  playlist_tracks_df <- playlist_offset %>%
+    map_df(~ get_playlist_tracks(playlist_df$id,
+                                 offset = .x) %>%
+             mutate(offset_group = as.factor(as.character(.x)))) 
+  
+  # 100 row limit still applies for get_track_audio_features(), with no offset argument
+  ## batch applying get_track_audio_features in groups of 100
+  
+  playlist_features_df <- playlist_offset %>%
+    map_df(~ get_track_audio_features(ids = playlist_tracks_df$track.id[playlist_tracks_df$offset_group == .x]))
+  
+  # join song and feature dataframes, select relevant columns
+  
+  playlist_tracks_features_df <- playlist_tracks_df %>%
+    left_join(playlist_features_df, by = c("track.id" = "id")) %>%
+    select("track.id", "track.artists", "track.name", "track.duration_ms", "track.popularity",
+           danceability,
+           energy,
+           key,
+           loudness,
+           mode,
+           speechiness,
+           acousticness,
+           instrumentalness,
+           liveness,
+           valence,
+           tempo
+           # type
+           ) %>%
+    unnest("track.artists",
+           names_repair = "unique") %>%
+    group_by(track.id) %>%
+    mutate(song_rownum = row_number() # , 
+           # artists_name = paste0(unlist(name), collapse = ","),
+           # id_name = paste0(unlist(id), collapse = ",")
+           ) %>%
+    ungroup() %>%
+    filter(song_rownum == "1") %>% # only selecting row for primary artist of a song
+    select(-c(href, type, uri, external_urls.spotify, song_rownum))
+  
+  return(playlist_tracks_features_df)
+  
+}
+
+
+track_features <- create_playlist_song_features(playlist_id = "4B2lrMRvAnzWYeFGchNEGC")
+
+# min(track_features2 == track_features)
+
+```
+
+
+### Analyze Island Vibes
+
+```{r}
+
+track_features %>%
+  select(track.popularity:tempo) %>%
+  na.omit() %>%
+  correlate() %>%
+  rearrange() %>%
+  network_plot(colours = c("orange", "white", "midnightblue"))
+
+```
+
+
+```{r}
+
+# spotify API only allows 50 IDs at a time
+
+island_vibes_artist_ids <- track_features$id
+
+track_feature_artists1 <- paste0(island_vibes_artist_ids[1:50], collapse=",")
+track_feature_artists2 <- paste0(island_vibes_artist_ids[51:100], collapse=",")
+track_feature_artists3 <- paste0(island_vibes_artist_ids[101:150], collapse=",")
+track_feature_artists4 <- paste0(island_vibes_artist_ids[151:200], collapse=",")
+track_feature_artists5 <- paste0(island_vibes_artist_ids[201], collapse=",")
+
+artists_genre1 <- spotifyr::get_artists(ids = as.character(track_feature_artists1))
+artists_genre2 <- spotifyr::get_artists(ids = as.character(track_feature_artists2))
+artists_genre3 <- spotifyr::get_artists(ids = as.character(track_feature_artists3))
+artists_genre4 <- spotifyr::get_artists(ids = as.character(track_feature_artists4))
+artists_genre5 <- spotifyr::get_artists(ids = as.character(track_feature_artists5))
+
+
+track_feature_artists <- rbind(artists_genre1,
+                               artists_genre2,
+                               artists_genre3,
+                               artists_genre4,
+                               artists_genre5)
+
+
+artists_genre_dis <- track_feature_artists %>%
+  select(id, name, genres, popularity, followers.total) %>%
+  distinct() %>%
+  group_by(id) %>%
+  mutate(genres2 = paste0(unlist(genres), collapse = ", ")) %>%
+  ungroup() %>%
+  select(-c(name, genres))
+
+track_features <- track_features %>%
+  left_join(artists_genre_dis, by = c("id" = "id"))
+
+tidy_artists <- track_features %>%
+  select(track.id, track.name, name, genres2, track.popularity) %>%
+  unnest_tokens(word, genres2) %>%
+  distinct()
+
+tidy_artists %>% head(15)
+
+```
+
+
+```{r}
+
+# scale the above chunk into a function to wrangle artists from playlist
+
+create_playlist_artist_features <- function(playlist_id) {
+  
+  # debug
+  # playlist_id <- "4B2lrMRvAnzWYeFGchNEGC"
+  # playlist_track_ct <- 471
+  
+  
+  if (exists("track_features")) {
+    
+    assertthat::assert_that(inherits(track_features, "data.frame"),
+                            msg = "track_features must be a dataframe.")
+    
+  } else {
+      
+    print("track_features object does not exist!")
+    
+  }
+  
+  track_features_track_ct <- nrow(track_features)
+  
+  track_features_max_offset <- plyr::round_any(track_features_track_ct, 100, f = ceiling) + 1
+  
+  track_features_offset <- seq(1, track_features_max_offset, by = 50)
+  
+  # ...
+  
+  }
+
+
+```
+
+
+
+```{r}
+
+tidy_artists %>%
+  group_by(word) %>%
+  summarise(
+    n = n(),
+    track.popularity = mean(track.popularity)
+  ) %>%
+  ggplot(aes(n, track.popularity)) +
+  geom_hline(
+    yintercept = mean(tidy_artists$track.popularity), lty = 2,
+    color = "gray50", size = 1.5
+  ) +
+  geom_jitter(color = "midnightblue", alpha = 0.7) +
+  geom_text_repel(aes(label = word),
+                  max.overlaps = 20) +
+  labs() +
+  scale_x_log10() +
+  theme_main() +
+  theme_main_add()
+
+```
+
+
+```{r}
+
+set.seed(123)
+iv_split <- initial_split(track_features, strata = track.popularity)
+iv_train <- training(iv_split)
+iv_test <- testing(iv_split)
+
+set.seed(234)
+iv_folds <- vfold_cv(iv_train, strata = track.popularity, v = 100)
+iv_folds
+
+```
+
+
+```{r}
+
+require("devtools")
+# install_github("tidymodels/textrecipes")
+
+library(textrecipes)
+
+iv_rec <- recipe(track.popularity ~ genres2, data = iv_train) %>%
+  step_tokenize(genres2) %>%
+  step_tokenfilter(genres2, max_tokens = 100) %>%
+  step_tfidf(genres2)
+
+## just to check this works
+prep(iv_rec) %>% bake(new_data = NULL)
+
+```
+
+### Model: Popularity ~ genre text features
+
+```{r}
+
+svm_spec <-
+  svm_linear() %>%
+  set_mode("regression")
+
+svm_spec
+
+```
+
+
+```{r}
+
+svm_wf <- workflow(iv_rec, svm_spec)
+
+```
+
+
+```{r}
+
+# install.packages("doParallel")
+library(doParallel)
+doParallel::registerDoParallel()
+contrl_preds <- control_resamples(save_pred = TRUE)
+
+svm_rs <- fit_resamples(
+  svm_wf,
+  resamples = iv_folds,
+  control = contrl_preds
+)
+
+collect_metrics(svm_rs)
+
+```
+
+
+```{r}
+
+collect_predictions(svm_rs) %>%
+    mutate(mod = "SVM") %>%
+  ggplot(aes(track.popularity, .pred)) +
+  geom_abline(lty = 2, color = "gray50", size = 1.2) +
+  geom_jitter(aes(color = id),
+              width = 0.5, alpha = 0.5,
+              show.legend = FALSE) +
+  facet_wrap(vars(mod)) +
+  coord_fixed() +
+  theme_main() +
+  theme_main_add()
+
+```
+
+
+```{r}
+
+final_fitted <- last_fit(svm_wf, iv_split)
+collect_metrics(final_fitted) ## metrics evaluated on the *testing* data
+
+final_wf <- extract_workflow(final_fitted)
+
+
+```
+
+```{r}
+  
+final_wf %>%
+ recipes::tidy() %>%
+  filter(term != "Bias") %>%
+  group_by(estimate > 0) %>%
+  slice_max(abs(estimate), n = 10) %>%
+  ungroup() %>%
+  mutate(term = str_remove(term, "tfidf_most_memorable_characteristics_")) %>%
+  ggplot(aes(estimate, fct_reorder(term, estimate), fill = estimate > 0)) +
+  geom_col(alpha = 0.8) +
+  scale_fill_discrete(labels = c("low ratings", "high ratings")) +
+  labs(y = NULL, fill = "More from...") +
+  theme_main() +
+  theme_main_add()
+
+```
+
+
+### EDA: What are the characteristics of Island Vibes songs?
+
+```{r}
+
+# converting song features from wide to long
+
+track_features_long <- track_features %>%
+  select(track.id, id, name, track.name, danceability:tempo) %>%
+  pivot_longer(cols = danceability:tempo,
+               names_to = "song_feature",
+               values_to = "song_feature_value")
+
+track_features %>% head(1)
+track_features_long %>% head(11) 
+
+```
+
+
+```{r}
+
+track_features_long %>%
+  ggplot(aes(x = song_feature_value,
+             fill = song_feature)) +
+  geom_histogram(position = position_dodge(),
+                 # bins = 2000,
+                 color = "black",
+                 show.legend = FALSE) +
+  labs(title = "Island Vibes: Song feature distributions",
+       subtitle = "Songs we will be looking for will be danceable and generally have high valence and loudness and low instrumentalness, acousticness and speechiness", 
+       x = "Feature Value",
+       y = "Ct. songs") +
+  # coord_cartesian(xlim = c(0,1)) +
+  facet_wrap(~song_feature,
+             scales = "free") +
+  theme_main() +
+  theme_main_add()
+
+```
+
+
+### Create Principal Components to combine variance of song features
+
+```{r}
+
+track_features_pca <- track_features %>% 
+  select(track.id, track.name, id, name, danceability:tempo)
+
+set.seed(123)
+
+iv_recipe_pca <- recipe(~ ., data = track_features_pca) %>%
+  update_role(track.id, track.name, id, name,
+              new_role = "id") %>%
+  step_normalize(all_predictors()) %>%
+  step_pca(all_predictors())
+
+iv_pca_prep <- prep(iv_recipe_pca)
+
+```
+
+```{r}
+
+tidy_pca <- tidy(iv_pca_prep, 2)
+
+new_order <- tidy_pca %>% 
+  group_by(component) %>% 
+  do(data_frame(al=levels(reorder(interaction(.$component, .$terms, drop=TRUE), .$value)))) %>% 
+  pull(al)
+
+tidy_pca %>%
+  mutate(component = fct_inorder(component)) %>%
+  mutate(al=factor(interaction(component, terms), levels=new_order)) %>%
+  ggplot(aes(value, al, fill = al)) +
+  geom_col(show.legend = FALSE) +
+  facet_wrap(~component,
+             scales = "free_y") +
+  labs(y = NULL) +
+  theme_main() +
+  theme_main_add()
+
+```
+
+How much variance in song features is explained by each Principal Component?
+
+```{r}
+
+sdev <- iv_pca_prep$steps[[2]]$res$sdev
+percent_variation <- sdev^2 / sum(sdev^2)
+
+tibble(
+  component = unique(tidy_pca$component),
+  percent_var = percent_variation ## use cumsum() to find cumulative, if you prefer
+) %>%
+  mutate(component = fct_inorder(component)) %>%
+  ggplot(aes(component, percent_var, group = 1)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(x = NULL, y = "Percent variance explained by each PCA component") +
+  theme_main() +
+  theme_main_add()
+
+
+tibble(
+  component = unique(tidy_pca$component),
+  percent_var = cumsum(percent_variation) 
+) %>%
+  mutate(component = fct_inorder(component)) %>%
+  ggplot(aes(component, percent_var, group = 1)) +
+  geom_line() +
+  geom_point() +
+  scale_y_continuous(labels = scales::percent_format()) +
+  labs(x = NULL, y = "Percent variance explained by each PCA component") +
+  coord_cartesian(ylim = c(0,1)) +
+  theme_main() +
+  theme_main_add()
+
+```
+
+```{r}
+
+juice(iv_pca_prep) %>% View()
+
+```
+
+```{r}
+
+# library(devtools)
+# install_github("vqv/ggbiplot")
+library(ggbiplot)
+
+
+# juice(iv_pca_prep) %>%
+#   ggbiplot()
+  
+  
+  ggplot(aes(x = PC1, y = PC2, label = track.name)) +
+  geom_point() +
+  geom_text_repel(max.overlaps = 150,
+                  size = 3) +
+  geom_hline(yintercept = 0,
+             color = "red",
+             linetype = "dashed") +
+  geom_vline(xintercept = 0,
+             color = "red",
+             linetype = "dashed") +
+  theme_main() +
+  theme_main_add()
+
+
+```
+
+
+PCA is not super great here, in that the variance seems too high for just 1-2 PCs to significantly explain.
+
+### UMAP
+
+```{r}
+
+library(embed)
+
+
+set.seed(123)
+
+iv_recipe_umap <- recipe(~ ., data = track_features_pca) %>%
+  update_role(track.id, track.name, id, name,
+              new_role = "id") %>%
+  step_normalize(all_predictors()) %>%
+  step_umap(all_predictors())
+
+iv_umap_prep <- prep(iv_recipe_umap)
+
+iv_umap_prep
+
+```
+
+```{r}
+
+juiced_joined_umap <- juice(iv_umap_prep) %>%
+  left_join(select(track_features, c("track.id",
+                                     "valence",
+                                     "acousticness",
+                                     "energy",
+                                     "loudness",
+                                     "track.popularity")), by = c("track.id" = "track.id"))
+
+juiced_joined_umap %>%
+  ggplot(aes(UMAP1, UMAP2, color = track.popularity)) +
+  geom_point(alpha = 0.7, size = 2) +
+  # geom_text(check_overlap = TRUE, hjust = "inward", family = "IBMPlexSans") +
+  labs(color = NULL) +
+  theme_main() +
+  theme_main_add()  
+
+```
+
+
+
+
+### Can we create a "bag" of songs to pick from and compare? 
+
+- Directionally from frequent island vibes genres
+  - probably reggae, country, fusion, rock, some rap
+
+```{r}
+
+
+
+```
+
+
+
+
+
